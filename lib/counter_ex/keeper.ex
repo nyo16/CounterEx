@@ -24,7 +24,7 @@ defmodule CounterEx.Keeper do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec init(keyword) :: {:ok, CounterEx.Keeper.t()}
+  @spec init(keyword) :: {:ok, any}
   def init(opts) do
     interval = Keyword.get(opts, :interval, nil)
     if interval, do: Process.send_after(self(), :sweep, interval)
