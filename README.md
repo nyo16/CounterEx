@@ -8,7 +8,7 @@
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
+[available in Hex](https://hex.pm/packages/counter_ex), the package can be installed
 by adding `counter_ex` to your list of dependencies in `mix.exs`:
 
 ```elixir
@@ -126,7 +126,5 @@ TBD
 * More counter types (:atomics|:counters from erlang OTP, HLL, Bloom etc..)
 * Telemetry integration
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/counter_ex](https://hexdocs.pm/counter_ex).
+Documentation can be found at [https://hexdocs.pm/counter_ex](https://hexdocs.pm/counter_ex/CounterEx.html).
 
