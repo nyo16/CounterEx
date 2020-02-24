@@ -1,11 +1,21 @@
 defmodule CounterEx.Keeper do
+  @moduledoc """
+  A "singleton" counter storage.
+  """
   use GenServer
 
   @table_name :counters
   @position 1
 
   alias __MODULE__
-  defstruct table_name: nil, sweep?: nil, interval: nil
+  defstruct table_name: nil, interval: nil
+
+  @table_opts [
+    :public,
+    :named_table,
+    read_concurrency: true,
+    write_concurrency: true
+  ]
 
   ### Public Api
 
@@ -16,19 +26,12 @@ defmodule CounterEx.Keeper do
 
   @spec init(keyword) :: {:ok, CounterEx.Keeper.t()}
   def init(opts) do
-    sweep? = Keyword.get(opts, :sweep, nil)
     interval = Keyword.get(opts, :interval, nil)
-    if sweep?, do: Process.send_after(self(), :clear_keys, interval)
+    if interval, do: Process.send_after(self(), :sweep, interval)
 
-    ref =
-      :ets.new(@table_name, [
-        :public,
-        :named_table,
-        read_concurrency: true,
-        write_concurrency: true
-      ])
+    @table_name = :ets.new(@table_name, @table_opts)
 
-    {:ok, %Keeper{table_name: ref, sweep?: sweep?, interval: interval}}
+    {:ok, %Keeper{table_name: @table_name, interval: interval}}
   end
 
   @spec stop :: :ok
@@ -50,7 +53,10 @@ defmodule CounterEx.Keeper do
 
   @spec set(binary, integer) :: boolean
   def set(key, value \\ 0) do
-    :ets.update_element(@table_name, key, [{@position + 1, value}])
+    case :ets.update_element(@table_name, key, {@position + 1, value}) do
+      true -> value
+      false ->:ets.insert(@table_name, {key, value})
+    end
   end
 
   @spec increment(binary(), integer) :: integer
@@ -58,10 +64,8 @@ defmodule CounterEx.Keeper do
     :ets.update_counter(@table_name, key, @position, {value, 0})
   end
 
-  def decrement(key, value \\ -1) do
-    :ets.update_counter(@table_name, key, @position, {value, 0})
-  end
 
+  @spec reset(binary, integer) :: boolean
   def reset(key, value \\ 0) do
     set(key, value)
   end
@@ -71,7 +75,7 @@ defmodule CounterEx.Keeper do
     :ets.delete_all_objects(@table_name)
   end
 
-  @spec get_value(binary) :: [tuple]
+  @spec get_value(binary) :: nil | integer
   def get_value(key) do
     case :ets.lookup(@table_name, key) do
       [] -> nil
@@ -83,5 +87,11 @@ defmodule CounterEx.Keeper do
 
   def handle_call(:get_state, _from, state) do
     {:reply, state, state}
+  end
+
+  def handle_info(:sweep, state) do
+    Process.send_after(self(), :sweep, state.interval)
+    :ets.delete_all_objects(state.table_name)
+    {:noreply, state}
   end
 end

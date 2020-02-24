@@ -1,8 +1,10 @@
 defmodule CounterExTest do
-  use ExUnit.Case
-  doctest CounterEx
+  use ExUnit.Case, async: true
 
-  test "greets the world" do
-    assert CounterEx.hello() == :world
+  setup context do
+    {:ok, pid} = CounterEx.Keeper.start_link()
+    Map.put(context, :pid, pid)
   end
+
+  doctest CounterEx, import: true
 end
