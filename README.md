@@ -68,7 +68,7 @@ end
    def start(_type, _args) do
     children = [
       ...other workers,
-      CounterEx.start_keeper() or CounterEx.start_keeper_with_sweep(interval: 10_000) # time in ms
+      CounterEx.start_keeper() or CounterEx.start_keeper_with_sweep(10_000) # time in ms
     ]
 
     .......
