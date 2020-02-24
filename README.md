@@ -2,6 +2,10 @@
 
 **CounterEx is a small lib to help dealing with counters.**
 
+
+[![Build Status](https://github.com/nyo16/CounterEx/workflows/CI/badge.svg)](https://github.com/nyo16/CounterEx/actions)
+
+
 ## Installation
 
 If [available in Hex](https://hex.pm/docs/publish), the package can be installed
