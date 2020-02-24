@@ -55,15 +55,22 @@ defmodule CounterEx.Keeper do
   def set(key, value \\ 0) do
     case :ets.update_element(@table_name, key, {@position + 1, value}) do
       true -> value
-      false ->:ets.insert(@table_name, {key, value})
+      false -> :ets.insert(@table_name, {key, value})
     end
   end
 
-  @spec increment(binary(), integer) :: integer
-  def increment(key, value \\ 1) do
-    :ets.update_counter(@table_name, key, @position, {value, 0})
-  end
 
+  @spec increment(
+          any,
+          [{integer, integer} | {integer, integer, integer, integer}]
+          | integer
+          | {integer, integer}
+          | {integer, integer, integer, integer},
+          any
+        ) :: [integer] | integer
+  def increment(key, value \\ 1, default \\ 0) do
+    :ets.update_counter(@table_name, key, value, {1, default})
+  end
 
   @spec reset(binary, integer) :: boolean
   def reset(key, value \\ 0) do

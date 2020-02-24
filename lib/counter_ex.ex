@@ -32,8 +32,9 @@ defmodule CounterEx do
 
   """
   @spec inc(binary, integer) :: integer
-  def inc(key, step \\ 1) when (is_binary(key) or is_atom(key)) and is_integer(step),
-    do: Keeper.increment(key, step)
+  def inc(key, step \\ 1, default \\ 0)
+      when (is_binary(key) or is_atom(key)) and is_integer(step),
+      do: Keeper.increment(key, step, default)
 
   @doc """
   Returns the value of the counter or nil
@@ -87,4 +88,28 @@ defmodule CounterEx do
   """
   @spec set(binary, integer) :: boolean
   def set(key, value \\ 0), do: Keeper.set(key, value)
+
+  def benchmark(parallel \\ 2) do
+    {:ok, _pid} = CounterEx.Keeper.start_link()
+
+    Benchee.run(
+      %{
+        "simple key inc" => fn -> CounterEx.inc("test.key") end
+      },
+      parallel: parallel
+    )
+
+    CounterEx.Keeper.stop()
+
+    {:ok, _pid} = CounterEx.Keeper.start_link(interval: 1_000)
+
+    Benchee.run(
+      %{
+        "simple key inc with sweep" => fn -> CounterEx.inc("test.key") end
+      },
+      parallel: parallel
+    )
+
+    CounterEx.Keeper.stop()
+  end
 end
