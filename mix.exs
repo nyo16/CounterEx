@@ -61,7 +61,8 @@ defmodule CounterEx.MixProject do
       links: %{
         "GitHub" => @source_url
       },
-      maintainers: ["nyo16"]
+      maintainers: ["nyo16"],
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE.md CHANGELOG.md guides)
     ]
   end
 
@@ -72,6 +73,7 @@ defmodule CounterEx.MixProject do
       source_url: @source_url,
       extras: [
         "README.md",
+        "CHANGELOG.md": [title: "Changelog"],
         "guides/migration.md": [title: "Migration Guide"],
         "guides/backends.md": [title: "Backend Comparison"]
       ],
