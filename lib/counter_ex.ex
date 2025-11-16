@@ -249,13 +249,13 @@ defmodule CounterEx do
   def reset(key_or_namespace, value_or_key \\ 0, value \\ 0)
 
   def reset(key, value, _value) when (is_atom(key) or is_binary(key)) and is_integer(value) do
-    Keeper.reset(@default_namespace, key, value)
+    Keeper.reset(Keeper, @default_namespace, key, value)
   end
 
   def reset(namespace, key, value)
       when (is_atom(namespace) or is_binary(namespace)) and
              (is_atom(key) or is_binary(key)) and is_integer(value) do
-    Keeper.reset(namespace, key, value)
+    Keeper.reset(Keeper, namespace, key, value)
   end
 
   @doc """
@@ -395,6 +395,12 @@ defmodule CounterEx do
 
   """
   def benchmark(opts \\ []) do
+    unless Code.ensure_loaded?(Benchee) do
+      raise """
+      Benchee is not available. Add {:benchee, "~> 1.3"} to your mix.exs deps to run benchmarks.
+      """
+    end
+
     parallel = Keyword.get(opts, :parallel, 2)
 
     backends = [

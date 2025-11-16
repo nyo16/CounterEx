@@ -1,39 +1,45 @@
 defmodule CounterExTest do
   use ExUnit.Case
 
-  setup do
-    {:ok, _pid} = start_supervised({CounterEx, []})
+  setup context do
+    unless context[:skip_setup] do
+      {:ok, _pid} = start_supervised({CounterEx, []})
+    end
+
     :ok
   end
 
   describe "start_link/1" do
+    @tag :skip_setup
     test "starts with default ETS backend" do
-      {:ok, pid} = start_supervised({CounterEx, []}, id: :test_start)
+      {:ok, pid} = start_supervised({CounterEx, name: :test_ets_backend}, id: :test_start)
       assert Process.alive?(pid)
 
-      {:ok, info} = CounterEx.info()
+      {:ok, info} = CounterEx.Keeper.info(:test_ets_backend)
       assert info.type == :ets
     end
 
+    @tag :skip_setup
     test "starts with Atomics backend" do
       {:ok, _pid} =
         start_supervised(
-          {CounterEx, backend: CounterEx.Backend.Atomics, backend_opts: [capacity: 100]},
+          {CounterEx, name: :test_atomics_backend, backend: CounterEx.Backend.Atomics, backend_opts: [capacity: 100]},
           id: :test_atomics
         )
 
-      {:ok, info} = CounterEx.info()
+      {:ok, info} = CounterEx.Keeper.info(:test_atomics_backend)
       assert info.type == :atomics
     end
 
+    @tag :skip_setup
     test "starts with Counters backend" do
       {:ok, _pid} =
         start_supervised(
-          {CounterEx, backend: CounterEx.Backend.Counters, backend_opts: [capacity: 100]},
+          {CounterEx, name: :test_counters_backend, backend: CounterEx.Backend.Counters, backend_opts: [capacity: 100]},
           id: :test_counters
         )
 
-      {:ok, info} = CounterEx.info()
+      {:ok, info} = CounterEx.Keeper.info(:test_counters_backend)
       assert info.type == :counters
     end
   end

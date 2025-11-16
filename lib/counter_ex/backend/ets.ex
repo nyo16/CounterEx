@@ -39,11 +39,11 @@ defmodule CounterEx.Backend.ETS do
 
   @position 1
 
-  defstruct base_name: nil, tables: %{}
+  defstruct base_name: nil, registry: nil
 
   @type t :: %__MODULE__{
           base_name: atom(),
-          tables: %{CounterEx.Backend.namespace() => :ets.tid()}
+          registry: :ets.tid()
         }
 
   ## Public API
@@ -52,13 +52,17 @@ defmodule CounterEx.Backend.ETS do
   def init(opts) do
     base_name = Keyword.get(opts, :base_table_name, :counter_ex_ets)
 
+    # Create a registry table to store namespace->table mappings
+    registry = :ets.new(:"#{base_name}_registry", [:set, :public])
+
     state = %__MODULE__{
       base_name: base_name,
-      tables: %{}
+      registry: registry
     }
 
     # Initialize default namespace
-    {:ok, ensure_namespace(state, :default)}
+    ensure_namespace(state, :default)
+    {:ok, state}
   end
 
   @impl true
@@ -79,11 +83,11 @@ defmodule CounterEx.Backend.ETS do
 
   @impl true
   def get(state, namespace, key) do
-    case Map.get(state.tables, namespace) do
-      nil ->
+    case :ets.lookup(state.registry, namespace) do
+      [] ->
         {:ok, nil}
 
-      table ->
+      [{^namespace, table}] ->
         case :ets.lookup(table, key) do
           [] -> {:ok, nil}
           [{^key, value}] -> {:ok, value}
@@ -115,11 +119,11 @@ defmodule CounterEx.Backend.ETS do
 
   @impl true
   def delete(state, namespace, key) do
-    case Map.get(state.tables, namespace) do
-      nil ->
+    case :ets.lookup(state.registry, namespace) do
+      [] ->
         :ok
 
-      table ->
+      [{^namespace, table}] ->
         :ets.delete(table, key)
         emit_telemetry(:delete, %{namespace: namespace, key: key}, state)
         :ok
@@ -128,11 +132,11 @@ defmodule CounterEx.Backend.ETS do
 
   @impl true
   def get_all(state, namespace) do
-    case Map.get(state.tables, namespace) do
-      nil ->
+    case :ets.lookup(state.registry, namespace) do
+      [] ->
         {:ok, %{}}
 
-      table ->
+      [{^namespace, table}] ->
         counters =
           table
           |> :ets.tab2list()
@@ -144,11 +148,11 @@ defmodule CounterEx.Backend.ETS do
 
   @impl true
   def delete_namespace(state, namespace) do
-    case Map.get(state.tables, namespace) do
-      nil ->
+    case :ets.lookup(state.registry, namespace) do
+      [] ->
         :ok
 
-      table ->
+      [{^namespace, table}] ->
         :ets.delete_all_objects(table)
         emit_telemetry(:delete_namespace, %{namespace: namespace}, state)
         :ok
@@ -186,8 +190,10 @@ defmodule CounterEx.Backend.ETS do
 
   @impl true
   def info(state) do
+    namespaces_and_tables = :ets.tab2list(state.registry)
+
     counters_by_namespace =
-      state.tables
+      namespaces_and_tables
       |> Enum.map(fn {namespace, table} ->
         {namespace, :ets.info(table, :size)}
       end)
@@ -199,7 +205,7 @@ defmodule CounterEx.Backend.ETS do
       type: :ets,
       backend: __MODULE__,
       base_name: state.base_name,
-      namespaces: Map.keys(state.tables),
+      namespaces: Enum.map(namespaces_and_tables, fn {ns, _} -> ns end),
       counters_count: total_counters,
       counters_by_namespace: counters_by_namespace
     }
@@ -209,18 +215,24 @@ defmodule CounterEx.Backend.ETS do
 
   ## Private Functions
 
-  defp ensure_namespace(%__MODULE__{tables: tables} = state, namespace) do
-    if Map.has_key?(tables, namespace) do
-      state
-    else
-      table_name = table_name_for_namespace(state.base_name, namespace)
-      table = :ets.new(table_name, @table_opts)
-      %__MODULE__{state | tables: Map.put(tables, namespace, table)}
+  defp ensure_namespace(%__MODULE__{} = state, namespace) do
+    case :ets.lookup(state.registry, namespace) do
+      [{^namespace, _table}] ->
+        state
+
+      [] ->
+        table_name = table_name_for_namespace(state.base_name, namespace)
+        table = :ets.new(table_name, @table_opts)
+        :ets.insert(state.registry, {namespace, table})
+        state
     end
   end
 
   defp get_table(state, namespace) do
-    Map.fetch!(state.tables, namespace)
+    case :ets.lookup(state.registry, namespace) do
+      [{^namespace, table}] -> table
+      [] -> raise "Namespace #{namespace} not found"
+    end
   end
 
   defp table_name_for_namespace(base_name, namespace) do

@@ -53,18 +53,14 @@ defmodule CounterEx.Backend.Atomics do
 
   defstruct capacity: nil,
             signed: true,
-            atomics: %{},
-            key_maps: %{},
-            next_index: %{},
-            free_slots: %{}
+            registry: nil,
+            metadata: nil
 
   @type t :: %__MODULE__{
           capacity: pos_integer(),
           signed: boolean(),
-          atomics: %{CounterEx.Backend.namespace() => :atomics.atomics_ref()},
-          key_maps: %{CounterEx.Backend.namespace() => :ets.tid()},
-          next_index: %{CounterEx.Backend.namespace() => pos_integer()},
-          free_slots: %{CounterEx.Backend.namespace() => [pos_integer()]}
+          registry: :ets.tid(),
+          metadata: :ets.tid()
         }
 
   ## Public API
@@ -73,27 +69,33 @@ defmodule CounterEx.Backend.Atomics do
   def init(opts) do
     capacity = Keyword.get(opts, :capacity, @default_capacity)
     signed = Keyword.get(opts, :signed, true)
+    base_name = Keyword.get(opts, :base_name, :counter_ex_atomics)
+
+    # Registry stores namespace -> {atomics_ref, key_map_tid}
+    registry = :ets.new(:"#{base_name}_registry", [:set, :public])
+
+    # Metadata stores {namespace, :next_index} -> integer and {namespace, :free_slots} -> list
+    metadata = :ets.new(:"#{base_name}_metadata", [:set, :public])
 
     state = %__MODULE__{
       capacity: capacity,
       signed: signed,
-      atomics: %{},
-      key_maps: %{},
-      next_index: %{},
-      free_slots: %{}
+      registry: registry,
+      metadata: metadata
     }
 
     # Initialize default namespace
-    {:ok, ensure_namespace(state, :default)}
+    ensure_namespace(state, :default)
+    {:ok, state}
   end
 
   @impl true
   def inc(state, namespace, key, step, default) do
-    state = ensure_namespace(state, namespace)
+    ensure_namespace(state, namespace)
 
     case get_or_allocate_index(state, namespace, key) do
-      {:ok, index, state} ->
-        atomics_ref = Map.fetch!(state.atomics, namespace)
+      {:ok, index, _state} ->
+        atomics_ref = get_atomics_ref(state, namespace)
 
         # Check if this is a new counter (value is 0) and apply default
         current = :atomics.get(atomics_ref, index)
@@ -113,8 +115,10 @@ defmodule CounterEx.Backend.Atomics do
 
   @impl true
   def get(state, namespace, key) do
-    with {:ok, atomics_ref} <- Map.fetch(state.atomics, namespace),
-         {:ok, key_map} <- Map.fetch(state.key_maps, namespace) do
+    atomics_ref = get_atomics_ref(state, namespace)
+    key_map = get_key_map(state, namespace)
+
+    if atomics_ref && key_map do
       case :ets.lookup(key_map, key) do
         [] ->
           {:ok, nil}
@@ -124,17 +128,17 @@ defmodule CounterEx.Backend.Atomics do
           {:ok, value}
       end
     else
-      :error -> {:ok, nil}
+      {:ok, nil}
     end
   end
 
   @impl true
   def set(state, namespace, key, value) do
-    state = ensure_namespace(state, namespace)
+    ensure_namespace(state, namespace)
 
     case get_or_allocate_index(state, namespace, key) do
-      {:ok, index, state} ->
-        atomics_ref = Map.fetch!(state.atomics, namespace)
+      {:ok, index, _state} ->
+        atomics_ref = get_atomics_ref(state, namespace)
         :atomics.put(atomics_ref, index, value)
         emit_telemetry(:set, %{namespace: namespace, key: key, value: value}, state)
         {:ok, value}
@@ -151,8 +155,10 @@ defmodule CounterEx.Backend.Atomics do
 
   @impl true
   def delete(state, namespace, key) do
-    with {:ok, atomics_ref} <- Map.fetch(state.atomics, namespace),
-         {:ok, key_map} <- Map.fetch(state.key_maps, namespace) do
+    atomics_ref = get_atomics_ref(state, namespace)
+    key_map = get_key_map(state, namespace)
+
+    if atomics_ref && key_map do
       case :ets.lookup(key_map, key) do
         [] ->
           :ok
@@ -165,21 +171,23 @@ defmodule CounterEx.Backend.Atomics do
           :ets.delete(key_map, key)
 
           # Add index to free slots for reuse
-          free_slots = Map.get(state.free_slots, namespace, [])
-          state = put_in(state.free_slots[namespace], [index | free_slots])
+          free_slots = get_free_slots(state, namespace)
+          set_free_slots(state, namespace, [index | free_slots])
 
           emit_telemetry(:delete, %{namespace: namespace, key: key}, state)
           :ok
       end
     else
-      :error -> :ok
+      :ok
     end
   end
 
   @impl true
   def get_all(state, namespace) do
-    with {:ok, atomics_ref} <- Map.fetch(state.atomics, namespace),
-         {:ok, key_map} <- Map.fetch(state.key_maps, namespace) do
+    atomics_ref = get_atomics_ref(state, namespace)
+    key_map = get_key_map(state, namespace)
+
+    if atomics_ref && key_map do
       counters =
         key_map
         |> :ets.tab2list()
@@ -191,14 +199,16 @@ defmodule CounterEx.Backend.Atomics do
 
       {:ok, counters}
     else
-      :error -> {:ok, %{}}
+      {:ok, %{}}
     end
   end
 
   @impl true
   def delete_namespace(state, namespace) do
-    with {:ok, atomics_ref} <- Map.fetch(state.atomics, namespace),
-         {:ok, key_map} <- Map.fetch(state.key_maps, namespace) do
+    atomics_ref = get_atomics_ref(state, namespace)
+    key_map = get_key_map(state, namespace)
+
+    if atomics_ref && key_map do
       # Reset all atomics in the namespace
       for i <- 1..state.capacity do
         :atomics.put(atomics_ref, i, 0)
@@ -208,23 +218,23 @@ defmodule CounterEx.Backend.Atomics do
       :ets.delete_all_objects(key_map)
 
       # Reset state tracking
-      state = put_in(state.next_index[namespace], 1)
-      state = put_in(state.free_slots[namespace], [])
+      set_next_index(state, namespace, 1)
+      set_free_slots(state, namespace, [])
 
       emit_telemetry(:delete_namespace, %{namespace: namespace}, state)
       :ok
     else
-      :error -> :ok
+      :ok
     end
   end
 
   @impl true
   def compare_and_swap(state, namespace, key, expected, new_value) do
-    state = ensure_namespace(state, namespace)
+    ensure_namespace(state, namespace)
 
     case get_or_allocate_index(state, namespace, key) do
-      {:ok, index, state} ->
-        atomics_ref = Map.fetch!(state.atomics, namespace)
+      {:ok, index, _state} ->
+        atomics_ref = get_atomics_ref(state, namespace)
         current = :atomics.get(atomics_ref, index)
 
         if current == expected do
@@ -243,26 +253,37 @@ defmodule CounterEx.Backend.Atomics do
 
   @impl true
   def info(state) do
+    namespaces_and_data = :ets.tab2list(state.registry)
+
     counters_by_namespace =
-      state.key_maps
-      |> Enum.map(fn {namespace, key_map} ->
+      namespaces_and_data
+      |> Enum.map(fn {namespace, _atomics_ref, key_map} ->
         {namespace, :ets.info(key_map, :size)}
       end)
       |> Enum.into(%{})
 
     total_counters = counters_by_namespace |> Map.values() |> Enum.sum()
-    utilization = if total_counters > 0, do: total_counters / (state.capacity * map_size(state.atomics)), else: 0
+    namespace_count = length(namespaces_and_data)
+    utilization = if total_counters > 0 and namespace_count > 0, do: total_counters / (state.capacity * namespace_count), else: 0.0
+
+    free_slots_by_namespace =
+      namespaces_and_data
+      |> Enum.map(fn {namespace, _atomics_ref, _key_map} ->
+        slots = get_free_slots(state, namespace)
+        {namespace, length(slots)}
+      end)
+      |> Enum.into(%{})
 
     info = %{
       type: :atomics,
       backend: __MODULE__,
       capacity: state.capacity,
       signed: state.signed,
-      namespaces: Map.keys(state.atomics),
+      namespaces: Enum.map(namespaces_and_data, fn {ns, _, _} -> ns end),
       counters_count: total_counters,
       counters_by_namespace: counters_by_namespace,
       utilization: Float.round(utilization * 100, 2),
-      free_slots_by_namespace: state.free_slots |> Enum.map(fn {ns, slots} -> {ns, length(slots)} end) |> Enum.into(%{})
+      free_slots_by_namespace: free_slots_by_namespace
     }
 
     {:ok, info}
@@ -271,25 +292,44 @@ defmodule CounterEx.Backend.Atomics do
   ## Private Functions
 
   defp ensure_namespace(%__MODULE__{} = state, namespace) do
-    if Map.has_key?(state.atomics, namespace) do
-      state
-    else
-      # Create new atomics array
-      atomics_ref = :atomics.new(state.capacity, signed: state.signed)
+    case :ets.lookup(state.registry, namespace) do
+      [{^namespace, _atomics_ref, _key_map}] ->
+        state
 
-      # Create ETS table for key-to-index mapping
-      key_map = :ets.new(:"atomics_keys_#{namespace}", [:set, :public])
+      [] ->
+        # Create new atomics array
+        atomics_ref = :atomics.new(state.capacity, signed: state.signed)
 
-      state
-      |> put_in([Access.key(:atomics), namespace], atomics_ref)
-      |> put_in([Access.key(:key_maps), namespace], key_map)
-      |> put_in([Access.key(:next_index), namespace], 1)
-      |> put_in([Access.key(:free_slots), namespace], [])
+        # Create ETS table for key-to-index mapping
+        key_map = :ets.new(:"atomics_keys_#{namespace}_#{System.unique_integer([:positive])}", [:set, :public])
+
+        # Store in registry
+        :ets.insert(state.registry, {namespace, atomics_ref, key_map})
+
+        # Initialize metadata
+        :ets.insert(state.metadata, {{namespace, :next_index}, 1})
+        :ets.insert(state.metadata, {{namespace, :free_slots}, []})
+
+        state
+    end
+  end
+
+  defp get_atomics_ref(state, namespace) do
+    case :ets.lookup(state.registry, namespace) do
+      [{^namespace, atomics_ref, _key_map}] -> atomics_ref
+      [] -> nil
+    end
+  end
+
+  defp get_key_map(state, namespace) do
+    case :ets.lookup(state.registry, namespace) do
+      [{^namespace, _atomics_ref, key_map}] -> key_map
+      [] -> nil
     end
   end
 
   defp get_or_allocate_index(state, namespace, key) do
-    key_map = Map.fetch!(state.key_maps, namespace)
+    key_map = get_key_map(state, namespace)
 
     case :ets.lookup(key_map, key) do
       [{^key, index}] ->
@@ -301,29 +341,51 @@ defmodule CounterEx.Backend.Atomics do
   end
 
   defp allocate_index(state, namespace, key) do
-    key_map = Map.fetch!(state.key_maps, namespace)
-    free_slots = Map.get(state.free_slots, namespace, [])
+    key_map = get_key_map(state, namespace)
+    free_slots = get_free_slots(state, namespace)
 
     # Try to reuse a free slot first
     case free_slots do
       [index | rest] ->
         :ets.insert(key_map, {key, index})
-        state = put_in(state.free_slots[namespace], rest)
+        set_free_slots(state, namespace, rest)
         {:ok, index, state}
 
       [] ->
         # Allocate a new index
-        next_index = Map.get(state.next_index, namespace, 1)
+        next_index = get_next_index(state, namespace)
 
         if next_index > state.capacity do
           Logger.warning("Atomics capacity exceeded for namespace #{namespace}")
           {:error, :capacity_exceeded}
         else
           :ets.insert(key_map, {key, next_index})
-          state = put_in(state.next_index[namespace], next_index + 1)
+          set_next_index(state, namespace, next_index + 1)
           {:ok, next_index, state}
         end
     end
+  end
+
+  defp get_next_index(state, namespace) do
+    case :ets.lookup(state.metadata, {namespace, :next_index}) do
+      [{{^namespace, :next_index}, value}] -> value
+      [] -> 1
+    end
+  end
+
+  defp set_next_index(state, namespace, value) do
+    :ets.insert(state.metadata, {{namespace, :next_index}, value})
+  end
+
+  defp get_free_slots(state, namespace) do
+    case :ets.lookup(state.metadata, {namespace, :free_slots}) do
+      [{{^namespace, :free_slots}, slots}] -> slots
+      [] -> []
+    end
+  end
+
+  defp set_free_slots(state, namespace, slots) do
+    :ets.insert(state.metadata, {{namespace, :free_slots}, slots})
   end
 
   defp emit_telemetry(operation, metadata, _state) do

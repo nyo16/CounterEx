@@ -41,7 +41,7 @@ defmodule CounterEx.MixProject do
 
       # Dev and Test
       {:ex_doc, "~> 0.35", only: :dev, runtime: false},
-      {:benchee, "~> 1.3", only: :dev},
+      {:benchee, "~> 1.3", optional: true},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:stream_data, "~> 1.1", only: :test},
       {:excoveralls, "~> 0.18", only: :test}

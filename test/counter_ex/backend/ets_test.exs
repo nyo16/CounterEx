@@ -4,7 +4,9 @@ defmodule CounterEx.Backend.ETSTest do
   alias CounterEx.Backend.ETS
 
   setup do
-    {:ok, state} = ETS.init([])
+    # Use unique table name per test to avoid conflicts in async tests
+    table_name = :"counter_ex_ets_test_#{System.unique_integer([:positive])}"
+    {:ok, state} = ETS.init(base_table_name: table_name)
     %{state: state}
   end
 
@@ -12,7 +14,7 @@ defmodule CounterEx.Backend.ETSTest do
     test "initializes with default options" do
       assert {:ok, state} = ETS.init([])
       assert state.base_name == :counter_ex_ets
-      assert is_map(state.tables)
+      assert is_reference(state.registry)
     end
 
     test "initializes with custom base name" do
@@ -203,7 +205,7 @@ defmodule CounterEx.Backend.ETSTest do
 
       assert info.type == :ets
       assert info.backend == CounterEx.Backend.ETS
-      assert info.base_name == :counter_ex_ets
+      assert is_atom(info.base_name)
       assert is_list(info.namespaces)
       assert is_integer(info.counters_count)
       assert is_map(info.counters_by_namespace)
